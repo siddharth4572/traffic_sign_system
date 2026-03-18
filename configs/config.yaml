@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────
+# Traffic Sign Recognition System – config.yaml
+# ─────────────────────────────────────────────
+
+project:
+  name: "Traffic Sign Recognition & Hazard Prediction"
+  version: "1.0.0"
+
+# ── Paths ──────────────────────────────────────
+paths:
+  data_root:     "data/"
+  raw:           "data/raw/"
+  processed:     "data/processed/"
+  checkpoints:   "checkpoints/"
+  logs:          "logs/"
+  yolo_weights:  "checkpoints/yolo_tsr.pt"
+  cnn_weights:   "checkpoints/cnn_classifier.pt"
+
+# ── Dataset ────────────────────────────────────
+dataset:
+  name: "GTSRB"          # German Traffic Sign Recognition Benchmark
+  num_classes: 43
+  image_size: 224
+  train_split: 0.8
+  val_split:   0.1
+  test_split:  0.1
+
+# ── YOLO Detection ─────────────────────────────
+yolo:
+  base_model:    "yolov8n.pt"
+  img_size:      640
+  conf_threshold: 0.45
+  iou_threshold:  0.50
+  epochs:         50
+  batch_size:     16
+  device:         "cuda"       # "cuda" for GPU or "cpu" for CPU   # or "cpu"
+
+# ── CNN Classifier ─────────────────────────────
+cnn:
+  backbone:       "resnet50"   # resnet50 | efficientnet_b0 | vit_b_16
+  img_size:       224
+  epochs:         30
+  batch_size:     128
+  learning_rate:  0.001
+  weight_decay:   0.0001
+  dropout:        0.4
+  device:         "cuda"       # "cuda" for GPU or "cpu" for CPU
+
+# ── Augmentation ──────────────────────────────
+augmentation:
+  random_brightness: 0.3
+  random_contrast:   0.3
+  random_rotation:   15
+  horizontal_flip:   false   # signs are not horizontally symmetric
+  gaussian_noise:    true
+  motion_blur:       true
+  perspective:       true
+
+# ── Real-time inference ────────────────────────
+inference:
+  target_fps:         30
+  camera_index:       0
+  frame_buffer_size:  5
+  smoothing_window:   3    # temporal smoothing across N frames
+
+# ── Dashboard ──────────────────────────────────
+dashboard:
+  host:  "0.0.0.0"
+  port:  5000
+  debug: false
+
+# ── Hazard rules ──────────────────────────────
+# Each rule maps sign class → action
+hazard:
+  alert_cooldown_sec: 3   # suppress repeated alerts
+  audio_enabled:      true
+  tts_enabled:        true

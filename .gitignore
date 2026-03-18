@@ -1,0 +1,45 @@
+# Large files - don't commit to GitHub
+# These will be downloaded automatically by the training script
+
+# Dataset files
+data/raw/gtsrb/*.zip
+data/raw/gtsrb/GTSRB/
+data/processed/
+
+# Checkpoints (download after training)
+checkpoints/*.pt
+checkpoints/*.pth
+
+# Logs
+logs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
