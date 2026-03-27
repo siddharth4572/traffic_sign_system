@@ -24,7 +24,14 @@ class TrafficSignDetector:
         self.conf_threshold = self.cfg.get("yolo", {}).get("conf_threshold", 0.45)
         self.iou_threshold  = self.cfg.get("yolo", {}).get("iou_threshold", 0.50)
         self.img_size       = self.cfg.get("yolo", {}).get("img_size", 640)
-        self.device         = self.cfg.get("yolo", {}).get("device", "cpu")
+        
+        # Use configured device, but fall back to CPU if CUDA not available
+        configured_device = self.cfg.get("yolo", {}).get("device", "cpu")
+        if configured_device != "cpu" and not torch.cuda.is_available():
+            print(f"[Detector] CUDA requested but not available, falling back to CPU")
+            self.device = "cpu"
+        else:
+            self.device = configured_device
 
         if weights_path and Path(weights_path).exists():
             print(f"[Detector] Loading weights: {weights_path}")
@@ -32,6 +39,7 @@ class TrafficSignDetector:
         else:
             base = self.cfg.get("yolo", {}).get("base_model", "yolov8n.pt")
             print(f"[Detector] Loading base model: {base}")
+            print(f"[Detector]   Options: yolov8n.pt (fastest) → yolov8s.pt → yolov8m.pt → yolov8l.pt (slowest)")
             self.model = YOLO(base)
 
     # ── Training ──────────────────────────────────────────────────────────────

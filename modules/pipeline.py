@@ -1,6 +1,7 @@
 """
 modules/pipeline.py
 Real-time inference pipeline: Camera → YOLO → CNN → Hazard Engine → Annotated Frame
+Speed optimized with frame skipping, frame resizing, and lightweight processing.
 """
 
 import cv2
@@ -20,7 +21,7 @@ from configs.sign_classes   import SIGN_LABELS
 
 class RealtimePipeline:
     """
-    Orchestrates the full real-time pipeline.
+    Orchestrates the real-time pipeline with speed optimizations.
 
     Usage:
         pipeline = RealtimePipeline(cfg)
@@ -35,7 +36,12 @@ class RealtimePipeline:
         inf = cfg.get("inference", {})
         self.target_fps   = inf.get("target_fps", 30)
         self.cam_index    = inf.get("camera_index", 0)
-        self.buf_size     = inf.get("frame_buffer_size", 5)
+        self.buf_size     = inf.get("frame_buffer_size", 3)  # Reduced for speed
+        
+        # ── Performance optimization settings ──────────────────────────────────
+        self.frame_skip   = inf.get("frame_skip", 1)  # Process every Nth frame
+        self.resize_factor = inf.get("resize_factor", 1.0)  # 0.5 = 50% smaller
+        self.skip_cnn_classification = inf.get("skip_cnn_classification", False)
 
         # ── Load models ───────────────────────────────────────────────────────
         yolo_w = cfg["paths"]["yolo_weights"]
@@ -51,7 +57,13 @@ class RealtimePipeline:
         self.running = False
         self._frame_queue: queue.Queue = queue.Queue(maxsize=self.buf_size)
         self._latest_annotated: np.ndarray = None
-        self._stats = {"fps": 0.0, "detections": 0, "frame_count": 0, "current_dets": []}
+        self._frame_count_total = 0
+        self._stats = {
+            "fps": 0.0, 
+            "detections": 0, 
+            "frame_count": 0, 
+            "current_dets": [],
+        }
 
     # ── Camera reader thread ──────────────────────────────────────────────────
     def _camera_reader(self, cap: cv2.VideoCapture):
@@ -64,34 +76,48 @@ class RealtimePipeline:
 
     # ── Process one frame ─────────────────────────────────────────────────────
     def _process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, list, list]:
-        # 1. Detect signs
-        detections = self.detector.detect(frame)
+        # Resize frame if needed (for speed)
+        if self.resize_factor < 1.0:
+            h_scaled = int(frame.shape[0] * self.resize_factor)
+            w_scaled = int(frame.shape[1] * self.resize_factor)
+            frame_scaled = cv2.resize(frame, (w_scaled, h_scaled), interpolation=cv2.INTER_LINEAR)
+        else:
+            frame_scaled = frame
+        
+        # 1. Detect signs (fastest path first)
+        detections = self.detector.detect(frame_scaled)
 
-        # 2. Classify each crop
+        # 2. Classify each sign crop (optional - skip for speed)
         classified = []
-        for det in detections:
-            tensor = self.preprocessor.preprocess_crop(frame, det["bbox"])
-            if tensor is None:
-                continue
-            result = self.classifier.classify(tensor)
-            det["class_id"]   = result["class_id"]
-            det["confidence"] = result["confidence"]
-            det["label"]      = SIGN_LABELS.get(result["class_id"], "Unknown")
-            det["top_k"]      = result["top_k"]
-            classified.append(det)
+        if not self.skip_cnn_classification:
+            for det in detections:
+                tensor = self.preprocessor.preprocess_crop(frame_scaled, det["bbox"])
+                if tensor is None:
+                    continue
+                result = self.classifier.classify(tensor)
+                det["class_id"]   = result["class_id"]
+                det["confidence"] = result["confidence"]
+                det["label"]      = SIGN_LABELS.get(result["class_id"], "Unknown")
+                det["top_k"]      = result["top_k"]
+                classified.append(det)
+        else:
+            classified = detections
 
         # 3. Run hazard engine
         alerts = self.hazard.update(classified)
 
         # 4. Annotate frame
-        annotated = TrafficSignDetector.draw_detections(frame, classified, alerts)
+        annotated = TrafficSignDetector.draw_detections(frame_scaled, classified, alerts)
         annotated = self._overlay_hud(annotated, classified, alerts)
+        
+        # Resize back to original size if needed
+        if self.resize_factor < 1.0:
+            annotated = cv2.resize(annotated, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         return annotated, classified, alerts
 
     # ── HUD overlay ──────────────────────────────────────────────────────────
-    def _overlay_hud(self, frame: np.ndarray,
-                     detections: list, alerts: list) -> np.ndarray:
+    def _overlay_hud(self, frame: np.ndarray, detections: list, alerts: list) -> np.ndarray:
         h, w = frame.shape[:2]
         fps_text = f"FPS: {self._stats['fps']:.1f}"
         det_text = f"Signs: {len(detections)}"
@@ -120,6 +146,7 @@ class RealtimePipeline:
     def run(self):
         cap = cv2.VideoCapture(self.cam_index)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FPS, self.target_fps)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open camera index {self.cam_index}")
 
@@ -129,14 +156,19 @@ class RealtimePipeline:
         reader_thread.start()
 
         prev_time = time.time()
-        min_frame_dt = 1.0 / self.target_fps
 
-        print("[Pipeline] Running — press 'q' to quit")
+        print(f"[Pipeline] Speed mode: frame_skip={self.frame_skip}, resize={self.resize_factor:.2f} — press 'q' to quit")
         try:
             while self.running:
                 try:
                     frame = self._frame_queue.get(timeout=1.0)
                 except queue.Empty:
+                    continue
+                
+                self._frame_count_total += 1
+                
+                # Skip frames for faster processing on videos
+                if self._frame_count_total % self.frame_skip != 0:
                     continue
 
                 annotated, dets, alerts = self._process_frame(frame)
@@ -157,30 +189,38 @@ class RealtimePipeline:
                                       dets, alerts, self._stats["fps"])
 
                 cv2.imshow("Traffic Sign Recognition", annotated)
-                wait_ms = max(1, int((min_frame_dt - elapsed) * 1000))
-                if cv2.waitKey(wait_ms) & 0xFF == ord("q"):
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
         finally:
             self.running = False
             cap.release()
             cv2.destroyAllWindows()
             self.logger.close()
-            print("[Pipeline] Stopped")
+            print(f"[Pipeline] Stopped - Avg FPS: {self._stats['fps']:.1f}")
+
 
     # ── Generator for Flask streaming ─────────────────────────────────────────
     def iter_frames(self):
         """Yields JPEG-encoded bytes of annotated frames for HTTP streaming."""
         cap = cv2.VideoCapture(self.cam_index)
         self.running = True
+        frame_count = 0
         while self.running:
             ret, frame = cap.read()
             if not ret:
                 break
+            
+            frame_count += 1
+            # Skip frames for faster processing on videos
+            if frame_count % self.frame_skip != 0:
+                continue
+            
             annotated, dets, alerts = self._process_frame(frame)
             self._latest_annotated = annotated
-            _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
             yield buf.tobytes()
         cap.release()
+
 
     def get_stats(self) -> dict:
         return {**self._stats, "alerts": self.hazard.get_active_alerts()}

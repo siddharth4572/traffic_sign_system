@@ -58,10 +58,14 @@ augmentation:
 
 # ── Real-time inference ────────────────────────
 inference:
-  target_fps:         30
-  camera_index:       0
-  frame_buffer_size:  5
-  smoothing_window:   3    # temporal smoothing across N frames
+  target_fps:               30
+  camera_index:             0
+  frame_buffer_size:        3      # Reduced from 5 for speed
+  smoothing_window:         3
+  
+  # ── PERFORMANCE OPTIMIZATIONS ──────────────────
+  frame_skip:               1      # 1=all frames, 2=50% skip, 3=66% skip
+  resize_factor:            1.0    # 1.0=full, 0.75=75%, 0.5=50% (faster)
 
 # ── Dashboard ──────────────────────────────────
 dashboard:
